@@ -1,0 +1,178 @@
+---
+title: "HW 9"
+author: "Roshni Lulla"
+date: "`r Sys.Date()`"
+output: github_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+comma <- function(x, d = 2) format(x, digits = d, big.mark = ",")
+print_p <- function(x, d = 3) {
+    if (x >= .001) {
+        return(
+            paste("*p* =", sub("^0+", "", format(round(x, d), nsmall = d)))
+        )
+    } else {
+        return("*p* < .001")
+    }
+}
+```
+
+```{r load-pkg, message = FALSE, include=FALSE}
+library(here)  # makes reading data more consistent
+library(tidyverse)  # for data manipulation and plotting
+library(haven)  # for importing SPSS/SAS/Stata data
+library(lme4)  # for multilevel analysis
+library(boot)  # for bootstrap CI
+#library(bootmlm)  # for multilevel bootstrap
+library(remotes)
+remotes::install_github("marklhc/bootmlm")
+library(bootmlm)
+library(performance)  # for ICC and R^2
+library(sjPlot)  # for plotting
+library(parameters)  # for kr results
+library(modelsummary)  # for making tables
+library(lmerTest)
+theme_set(theme_classic() +
+    theme(panel.grid.major.y = element_line(color = "grey92")))
+```
+
+# Revised Prospectus
+
+  My project proposal will be using data collected at the Brain & Creativity Institute. The Institute focuses on understanding consciousness, emotions, decision-making, and other cognitive processes, primarily through neuroimaging studies. This project will specifically be focusing on the Institute's recent Affective Intelligence project that used functional magnetic resonance imaging (fMRI) along with extensive neuropsychological testing to assess facets of emotional processing. The current research will focus on the behavioral metrics obtained through neuropsychological testing, during which participants completed the Mayer-Salovey-Caruso Emotional Intelligence Test (MSCEIT), the NEO-Personality Inventory, the Wechsler Adult Intelligence Scale (WAIS), and the Interpersonal Reactivity Index (IRI). These metrics spanned various aspects of cognitive functioning and emotional processing, and were collected after participants completed emotional tasks in an hour-long fMRI scan, on a separate day.
+\
+\
+  This analysis will focus on understanding how some lower level cognitive metrics might predict higher-level processes such as emotion recognition. Based on this evaluation, we will also incorporate gender and age as level two predictors to incorporate differences in emotional processing that are known to exist across these variables. Since age was collected as a numerical value, age groups will be created in order to evaluate this level two predictor as a categorical value. We will specifically be investigating how verbal comprehension from the WAIS could predict emotional intelligence measured by the MSCEIT, as well as how interactions between gender and age might act as additional predictors of this relationship. Previous literature has identified an interaction between verbal knowledge and emotion concept representations. There is additionally a known association between gender and emotion comprehension, indicating that females are generally better than men at distinguishing and representing emotions. Based on this association, we would hypothesize that females may rely on verbal comprehension to a lesser degree compared to men. This would result in a smaller effect of verbal comprehension in predicting emotional intelligence specifically in women. 
+\
+\
+	The data is currently stored as an excel document, with the WAIS and MSCEIT scores listed out for each participant along with their respective gender and age information. The first step of the analysis will be to create age groups in order to have a categorical variable as the level two predictor in the model. This will involve reviewing the distribution of ages across all participants and identifying the quantiles they fall into. Based on this review, we will create age groups that are representative of the age distribution in the study population. We will then create models to understand the relationship between verbal comprehension and emotional intelligence. Focusing first on the interaction of our level one predictor, we will create a model looking at how verbal comprehension may predict emotional intelligence without the effects of age or gender. The next step will be looking at how age might impact this relationship as an individual level two predictor, and then as gender as an individual level two predictor. We will also look at the interaction of these level two predictors in a separate model. After comparing the results of these models, we can decide on next steps in terms of how to further the analysis or include additional predictors at either level one or two. 
+
+# Preliminary Analysis
+
+## Import Data
+
+```{r, message=FALSE, include = FALSE}
+dat <- read_csv("Affint_Data.csv")
+
+summary(dat$age)
+ggplot(dat, aes(x = dat$age)) + geom_histogram(bins = 50)
+
+dat <- dat %>%
+  mutate(dat, agegroup = case_when(
+    age<=21~1,
+    age>21&age<=28~2,
+    age>28&age<=35~3,
+    age>35~4
+  ))
+
+dat <- dat %>%
+    group_by(agegroup) %>%
+    mutate(verbcompCM = mean(verbcomp),
+           verbcompCMC = verbcomp - verbcompCM) %>%
+    ungroup()
+```
+
+## Variable Summary
+
+- `agegroup`: Participant Age Group
+- `gender`: Participant Gender
+- `verbcomp`: Abstract verbal reasoning, semantic knowledge, and verbal expression as measured by the WAIS
+- `emoint`: The ability to accurately identify others' emotions, causes of emotions, and the ability to incorporate this emotional intelligence into cognitive processes as measured by the MSCEIT
+
+```{r}
+datasummary(gender ~ (verbcomp + emoint) * (N + Mean + SD + Histogram),
+            data = dat)
+```
+
+## Intraclass Correlation
+
+```{r}
+m0 <- lmer(verbcomp ~ (1 | agegroup), data = dat)
+
+summary(m0)
+performance::icc(m0)
+```
+
+## Model
+
+Level One
+$$\text{emoint}_{ij} = \beta_{0j} + \beta_{1j} \text{verbcomp}_{ij} + e_{ij}$$
+Level Two 
+$$
+\begin{aligned}
+  \beta_{0j} & = \gamma_{00} + \gamma_{01} \text{gender}_j + \gamma_{02} \text{age}_j + u_{0j}  \\
+  \beta_{1j} & = \gamma_{10}
+\end{aligned}
+$$
+\
+```{r}
+m1 <- lmer(emoint ~ verbcomp + verbcompCM + (1 | agegroup) + (1 | gender), data = dat)
+summary(m1)
+confint(m1)
+
+#checking if the inclusion of cluster mean centered values makes this interaction more significant 
+m2 <- lmer(emoint ~ verbcompCMC + verbcompCM + (1 | agegroup) + (1 | gender), data = dat)
+summary(m2)
+confint(m2)
+
+m3 <- lmer(emoint ~ verbcomp + verbcompCM + (verbcomp | agegroup) + (verbcomp | gender), data = dat)
+summary(m3)
+ranova(m3)
+
+m4 <- lmer(emoint ~ verbcomp + verbcompCM + (verbcompCM | agegroup) + (verbcompCM | gender), data = dat)
+summary(m4)
+ranova(m4)
+```
+
+## Results
+
+```{r table-m1}
+msummary(list("Between Within" = m1,
+              "Random Slopes" = m3),
+         estimate = "{estimate} [{conf.low}, {conf.high}]",
+         statistic = NULL,
+         ci_method = "Kenward")
+```
+
+```{r fig-m1}
+plot_model(m1, type = "pred", pred.type = "re",
+           terms = "verbcomp", show.data = TRUE,
+           jitter = 0.1, dot.size = 0.2)
+
+plot_model(m1, type = "slope", show.data = TRUE)
+
+plot_model(m3, type = "pred", pred.type = "re",
+           terms = "verbcomp", show.data = TRUE,
+           jitter = 0.1, dot.size = 0.2)
+
+plot_model(m3, type = "slope", show.data = TRUE)
+
+```
+
+```{r, include = FALSE}
+m1_coef <- parameters::parameters(m1, ci_method = "satterthwaite")
+m3_coef <- parameters::parameters(m3, ci_method = "satterthwaite")
+
+print_coef <- function(term, tab = m1_coef) {
+    coef_pos <- which(tab$Parameter == term)
+    paste0(comma(tab[coef_pos, "Coefficient"]),
+           ", *SE* = ", comma(tab[coef_pos, "SE"]),
+           ", *t*(", comma(tab[coef_pos, "df_error"]), ") = ",
+           comma(tab[coef_pos, "t"], 3),
+           ", ", print_p(tab[coef_pos, "p"]))
+}
+
+r2_m1 <- performance::r2(m1)
+r2_m1
+
+r2_m3 <- performance::r2(m3)
+r2_m3
+
+print_coef(m1_coef)
+print_coef(m3_coef)
+```
+
+Overall the analysis shows evidence of a positive association between verbal comprehension and emotional intelligence scores, when looking at the fixed effects in the model. In terms of second level predictors, it does not seem like either age or gender are significant predictors of this association. The fixed effects across age groups, or the association of verbal comprehension and emotional intelligence was $\gamma_{10}$ = `r print_coef("verbcomp")`. The $R^2$ of this model, which did not include random slopes, was found to be `r comma(r2_m1[1], 2)`. 
+
+
